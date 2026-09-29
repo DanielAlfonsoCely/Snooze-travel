@@ -1,0 +1,14 @@
+.gradle/
+build/
+/app/build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+captures/
+.kotlin/
+
+# Firma: nunca subir el keystore ni sus claves
+keystore.properties
+*.jks
+*.keystore

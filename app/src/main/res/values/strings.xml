@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Snooze Travel</string>
+    <string name="share_label">Guardar en Snooze Travel</string>
+    <string name="widget_description">Activa o desactiva el despertador de viaje</string>
+</resources>

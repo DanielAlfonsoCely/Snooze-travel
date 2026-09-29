@@ -1,0 +1,23 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Luna creciente -->
+    <path
+        android:fillColor="#FFF1EEE6"
+        android:pathData="M50.63,32.04 A22,22 0 1,0 73.13,60.16 A18,18 0 0,1 50.63,32.04 Z" />
+    <!-- Zz -->
+    <path
+        android:pathData="M64,30 h10 l-10,11 h10"
+        android:strokeWidth="3"
+        android:strokeColor="#FFC9D8DD"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M76,43 h6 l-6,7 h6"
+        android:strokeWidth="2.4"
+        android:strokeColor="#FFC9D8DD"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>
