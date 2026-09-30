@@ -12,12 +12,35 @@ sealed interface TripStatus {
         val destinationId: String,
         val destinationName: String,
         val trigger: Trigger,
+        val destLat: Double,
+        val destLon: Double,
+        val myLat: Double? = null,
+        val myLon: Double? = null,
         val distanceM: Double? = null,
         val etaSec: Double? = null,
         val progress: Float = 0f,
+    ) : TripStatus {
+        /** Velocidad real de acercamiento (m/s), si ya se conoce. */
+        val speedMs: Double? get() = if (distanceM != null && etaSec != null && etaSec > 0) distanceM / etaSec else null
+    }
+
+    /** [again] = la alarma volvió a sonar porque el bus pasó el destino. */
+    data class Alarming(
+        val destinationId: String,
+        val destinationName: String,
+        val again: Boolean = false,
     ) : TripStatus
 
-    data class Alarming(val destinationId: String, val destinationName: String) : TripStatus
+    /** Alarma apagada; se vigila que realmente te bajes. */
+    data class Guarding(
+        val destinationId: String,
+        val destinationName: String,
+        val destLat: Double,
+        val destLon: Double,
+        val myLat: Double? = null,
+        val myLon: Double? = null,
+        val distanceM: Double? = null,
+    ) : TripStatus
 }
 
 /** Estado en memoria compartido por servicio, UI y widget. */

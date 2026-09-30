@@ -21,7 +21,7 @@ class WidgetToggleActivity : ComponentActivity() {
         if (handled) return
         handled = true
         when (TripState.status.value) {
-            is TripStatus.Active -> TripService.stop(this)
+            is TripStatus.Active, is TripStatus.Guarding -> TripService.stop(this)
             is TripStatus.Alarming -> TripService.dismiss(this)
             TripStatus.Idle -> {
                 val d = Store.lastDestination()

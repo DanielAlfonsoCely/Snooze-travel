@@ -79,13 +79,14 @@ class AlarmActivity : ComponentActivity() {
             val theme by Store.theme.collectAsStateWithLifecycle()
             val status by TripState.status.collectAsStateWithLifecycle()
             val name = (status as? TripStatus.Alarming)?.destinationName ?: if (isTest) "Prueba" else "tu destino"
+            val again = (status as? TripStatus.Alarming)?.again == true
 
             if (!isTest) LaunchedEffect(status) { if (status !is TripStatus.Alarming) finish() }
             if (isTest) LaunchedEffect(Unit) { delay(TEST_DURATION_MS); dismiss() }
 
             SnoozeTheme(isDark(theme)) {
                 BackHandler { /* bloqueado: hay que mantener presionado */ }
-                AlarmScreen(name = name, test = isTest, onDismiss = ::dismiss)
+                AlarmScreen(name = name, test = isTest, again = again, onDismiss = ::dismiss)
             }
         }
     }
@@ -130,7 +131,7 @@ class AlarmActivity : ComponentActivity() {
 }
 
 @Composable
-private fun AlarmScreen(name: String, test: Boolean, onDismiss: () -> Unit) {
+private fun AlarmScreen(name: String, test: Boolean, again: Boolean, onDismiss: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val pulse = rememberInfiniteTransition(label = "pulse")
     val ring by pulse.animateFloat(
@@ -152,7 +153,11 @@ private fun AlarmScreen(name: String, test: Boolean, onDismiss: () -> Unit) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(Modifier.height(48.dp))
             Text(
-                if (test) "Prueba de alarma" else "Estás llegando",
+                when {
+                    test -> "Prueba de alarma"
+                    again -> "¡Te estás pasando de"
+                    else -> "Estás llegando"
+                },
                 style = MaterialTheme.typography.titleMedium,
                 color = cs.onSurfaceVariant,
             )

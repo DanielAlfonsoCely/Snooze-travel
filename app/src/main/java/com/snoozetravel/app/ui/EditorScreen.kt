@@ -68,7 +68,6 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.snoozetravel.app.data.TriggerMode
 import com.snoozetravel.app.data.formatDistance
 import com.snoozetravel.app.util.Loc
 import com.snoozetravel.app.util.haversine
@@ -198,33 +197,16 @@ fun EditorScreen(vm: EditorViewModel, dark: Boolean, onDone: () -> Unit) {
 
             // --- Mapa
             Spacer(Modifier.height(12.dp))
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(280.dp)
-                    .clip(MaterialTheme.shapes.large),
-            ) {
-                OsmMap(
-                    point = vm.selected,
-                    radiusM = vm.trigger.takeIf { it.mode == TriggerMode.DISTANCE }?.value?.times(1000),
-                    dark = dark,
-                    center = vm.bias,
-                    onLongPress = vm::adjust,
-                    modifier = Modifier.fillMaxSize(),
-                )
-                Surface(
-                    color = cs.surface.copy(alpha = 0.88f),
-                    shape = MaterialTheme.shapes.small,
-                    modifier = Modifier.align(Alignment.TopCenter).padding(10.dp),
-                ) {
-                    Text(
-                        if (vm.selected == null) "Busca un lugar arriba" else "Mantén presionado para ajustar el punto",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = cs.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                    )
-                }
-            }
+            RadiusPreviewMap(
+                place = vm.selected,
+                trigger = vm.trigger,
+                dark = dark,
+                center = vm.bias,
+                interactive = true,
+                onLongPress = vm::adjust,
+                topHint = if (vm.selected == null) "Busca un lugar arriba" else "Mantén presionado para ajustar el punto",
+                modifier = Modifier.height(300.dp),
+            )
 
             // --- Detalles (aparecen al elegir un lugar)
             AnimatedVisibility(vm.selected != null, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {

@@ -172,10 +172,28 @@ fun SettingsScreen(onBack: () -> Unit) {
                         }
                         ToggleRow("Subir el volumen poco a poco", s.rampVolume) { v -> Store.updateSettings { it.copy(rampVolume = v) } }
                         ToggleRow("Usar volumen máximo de alarma", s.maxVolume) { v -> Store.updateSettings { it.copy(maxVolume = v) } }
+                        ToggleRow("Solo por audífonos si están conectados", s.headphonesOnly) { v ->
+                            Store.updateSettings { it.copy(headphonesOnly = v) }
+                        }
                     }
                 }
             }
-            Hint("Primero vibra y, si no la apagas, empieza a sonar. Suena aunque el celular esté en silencio.")
+            Hint(
+                "Primero vibra y, si no la apagas, empieza a sonar. Suena aunque el celular esté en silencio. " +
+                    "Con audífonos (cable o Bluetooth) suena solo en ellos, a volumen moderado; si se desconectan, pasa al parlante."
+            )
+
+            // --- Anti-pasarse
+            SectionTitle("Si te vuelves a dormir")
+            Card {
+                ToggleRow("Volver a sonar si el bus pasa mi destino", s.guardEnabled) { v ->
+                    Store.updateSettings { it.copy(guardEnabled = v) }
+                }
+            }
+            Hint(
+                "Después de apagar la alarma sigo mirando unos minutos: si el bus pasa tu destino y se aleja más de 1 km, " +
+                    "suena otra vez. Se apaga sola cuando llegas o al tocar \"Ya me bajé\"."
+            )
 
             // --- Aviso previo
             SectionTitle("Aviso previo")

@@ -13,6 +13,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -51,6 +52,8 @@ class TripService : Service() {
     private val handler = Handler(Looper.getMainLooper())
 
     private var engine: TripEngine? = null
+    private var guard: PassGuard? = null
+    private var alarmAgain = false
     private var destination: Destination? = null
     private var trigger: Trigger? = null
     private var player: AlarmPlayer? = null
@@ -68,6 +71,7 @@ class TripService : Service() {
     }
 
     private val autoStop = Runnable { endTrip() }
+    private val guardTimeout = Runnable { if (guard != null) endTrip() }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -82,8 +86,9 @@ class TripService : Service() {
                 }
                 return START_REDELIVER_INTENT
             }
-            ACTION_STOP, ACTION_DISMISS -> endTrip()
-            else -> if (engine == null && TripState.status.value !is TripStatus.Alarming) stopSelf()
+            ACTION_STOP -> endTrip()
+            ACTION_DISMISS -> onDismiss()
+            else -> if (engine == null && guard == null && TripState.status.value !is TripStatus.Alarming) stopSelf()
         }
         return START_NOT_STICKY
     }
@@ -98,7 +103,10 @@ class TripService : Service() {
         val s = Store.settings.value
         val pre = if (!s.preAlertEnabled) null else if (t.mode == TriggerMode.DISTANCE) s.preOffsetKm else s.preOffsetMin
         engine = TripEngine(d.lat, d.lon, t, pre)
-        TripState.set(TripStatus.Active(d.id, d.name, t))
+        guard = null
+        alarmAgain = false
+        handler.removeCallbacks(guardTimeout)
+        TripState.set(TripStatus.Active(d.id, d.name, t, d.lat, d.lon))
 
         try {
             ServiceCompat.startForeground(
@@ -129,6 +137,7 @@ class TripService : Service() {
     }
 
     private fun onLocation(loc: Location) {
+        if (guard != null) return onGuardLocation(loc)
         val e = engine ?: return
         if (e.mainDone) return
         val d = destination ?: return
@@ -136,7 +145,12 @@ class TripService : Service() {
         val now = loc.elapsedRealtimeNanos / 1_000_000
         val step = e.update(loc.latitude, loc.longitude, if (loc.hasAccuracy()) loc.accuracy else 50f, now) ?: return
 
-        TripState.set(TripStatus.Active(d.id, d.name, t, step.distanceM, step.etaSec, step.progress))
+        TripState.set(
+            TripStatus.Active(
+                d.id, d.name, t, d.lat, d.lon, loc.latitude, loc.longitude,
+                step.distanceM, step.etaSec, step.progress,
+            )
+        )
 
         if (step.fireMain) {
             fireAlarm()
@@ -195,10 +209,75 @@ class TripService : Service() {
         Notifications.notify(this, Notifications.ID_PRE, n)
     }
 
-    private fun fireAlarm() {
+    // ------------------------------------------------------------------ vigilancia anti-pasarse
+
+    private fun onDismiss() {
+        if (TripState.status.value !is TripStatus.Alarming) {
+            if (engine == null && guard == null) endTrip()
+            return
+        }
+        stopAlarmOutputs()
+        if (!alarmAgain && Store.settings.value.guardEnabled) startGuard() else endTrip()
+    }
+
+    private fun startGuard() {
+        val d = destination ?: return endTrip()
+        guard = PassGuard(d.lat, d.lon, SystemClock.elapsedRealtime())
+        TripState.set(TripStatus.Guarding(d.id, d.name, d.lat, d.lon))
+        Notifications.notify(this, Notifications.ID_TRIP, guardNotification(null))
+        requestUpdates(15_000, true)
+        requestImmediateFix()
+        handler.postDelayed(guardTimeout, PassGuard.MAX_MS + 60_000)
+        TripWidgetProvider.update(this)
+    }
+
+    private fun onGuardLocation(loc: Location) {
+        val g = guard ?: return
+        val d = destination ?: return
+        val now = loc.elapsedRealtimeNanos / 1_000_000
+        val step = g.update(loc.latitude, loc.longitude, if (loc.hasAccuracy()) loc.accuracy else 50f, now) ?: return
+        when (step.verdict) {
+            PassGuard.Verdict.KEEP -> {
+                TripState.set(TripStatus.Guarding(d.id, d.name, d.lat, d.lon, loc.latitude, loc.longitude, step.distanceM))
+                Notifications.notify(this, Notifications.ID_TRIP, guardNotification(step.distanceM))
+                if (abs(step.distanceM - lastWidgetDistance) > 250) {
+                    lastWidgetDistance = step.distanceM
+                    TripWidgetProvider.update(this)
+                }
+                requestUpdates(step.nextIntervalMs, step.highAccuracy)
+            }
+            PassGuard.Verdict.PASSED -> {
+                guard = null
+                handler.removeCallbacks(guardTimeout)
+                fireAlarm(again = true)
+            }
+            else -> endTrip() // llegaste, te bajaste en otro lado o se cumplió el tope
+        }
+    }
+
+    private fun guardNotification(distanceM: Double?): Notification {
+        val name = destination?.name ?: "tu destino"
+        val where = distanceM?.let { "A ${formatDistance(it)} de $name. " }.orEmpty()
+        return NotificationCompat.Builder(this, Notifications.CH_TRIP)
+            .setSmallIcon(R.drawable.ic_stat_snooze)
+            .setContentTitle("Vigilando que te bajes")
+            .setContentText("${where}Si el bus se pasa, la alarma vuelve a sonar.")
+            .setStyle(NotificationCompat.BigTextStyle().bigText("${where}Si el bus se pasa, la alarma vuelve a sonar."))
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setShowWhen(false)
+            .setContentIntent(openAppIntent())
+            .addAction(0, "Ya me bajé", serviceIntent(ACTION_STOP, 4))
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .build()
+    }
+
+    private fun fireAlarm(again: Boolean = false) {
         val d = destination ?: return
         stopUpdates()
-        TripState.set(TripStatus.Alarming(d.id, d.name))
+        alarmAgain = again
+        TripState.set(TripStatus.Alarming(d.id, d.name, again))
         Notifications.cancel(this, Notifications.ID_PRE)
 
         wakeLock = getSystemService(PowerManager::class.java)
@@ -213,7 +292,7 @@ class TripService : Service() {
         )
         val n = NotificationCompat.Builder(this, Notifications.CH_ALARM)
             .setSmallIcon(R.drawable.ic_stat_snooze)
-            .setContentTitle("¡Despierta! Llegando a ${d.name}")
+            .setContentTitle(if (again) "¡Te estás pasando de ${d.name}!" else "¡Despierta! Llegando a ${d.name}")
             .setContentText("Toca para apagar la alarma")
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
@@ -244,7 +323,10 @@ class TripService : Service() {
         stopUpdates()
         stopAlarmOutputs()
         Notifications.cancel(this, Notifications.ID_PRE)
+        handler.removeCallbacks(guardTimeout)
         engine = null
+        guard = null
+        alarmAgain = false
         destination = null
         trigger = null
         TripState.set(TripStatus.Idle)

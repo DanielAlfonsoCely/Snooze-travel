@@ -115,6 +115,8 @@ object Store {
             .putBoolean("pre_enabled", s.preAlertEnabled)
             .putFloat("pre_km", s.preOffsetKm.toFloat())
             .putFloat("pre_min", s.preOffsetMin.toFloat())
+            .putBoolean("headphones_only", s.headphonesOnly)
+            .putBoolean("guard", s.guardEnabled)
             .apply()
     }
 
@@ -131,6 +133,8 @@ object Store {
             preAlertEnabled = prefs.getBoolean("pre_enabled", d.preAlertEnabled),
             preOffsetKm = prefs.getFloat("pre_km", d.preOffsetKm.toFloat()).toDouble(),
             preOffsetMin = prefs.getFloat("pre_min", d.preOffsetMin.toFloat()).toDouble(),
+            headphonesOnly = prefs.getBoolean("headphones_only", d.headphonesOnly),
+            guardEnabled = prefs.getBoolean("guard", d.guardEnabled),
         )
     }
 

@@ -135,3 +135,77 @@ class TripEngine(
         val INTERVAL_BUCKETS_MS = longArrayOf(5_000, 10_000, 15_000, 30_000, 60_000, 90_000, 120_000, 180_000)
     }
 }
+
+/**
+ * Vigilancia después de apagar la alarma: detecta si el bus pasó el destino y se aleja
+ * (te volviste a dormir) o si ya te bajaste, para terminar y apagar el GPS.
+ *
+ * - PASSED: la distancia creció [PASS_MARGIN_M] (+ error GPS) sobre la mínima alcanzada.
+ * - ARRIVED: llevas [ARRIVED_HOLD_MS] a menos de [ARRIVED_RADIUS_M] del destino.
+ * - STILL: [STILL_HOLD_MS] sin moverte (te bajaste en otro lado).
+ * - TIMEOUT: tope de seguridad para no dejar el GPS encendido.
+ */
+class PassGuard(
+    private val destLat: Double,
+    private val destLon: Double,
+    private val startMs: Long,
+) {
+    enum class Verdict { KEEP, PASSED, ARRIVED, STILL, TIMEOUT }
+
+    data class Step(val verdict: Verdict, val distanceM: Double, val nextIntervalMs: Long, val highAccuracy: Boolean)
+
+    private data class Sample(val tMs: Long, val distanceM: Double)
+
+    var minDistance = Double.MAX_VALUE
+        private set
+    private var nearSinceMs: Long? = null
+    private val samples = ArrayDeque<Sample>()
+    private var lastFixMs = Long.MIN_VALUE
+
+    fun update(lat: Double, lon: Double, accuracyM: Float, nowMs: Long): Step? {
+        if (nowMs <= lastFixMs) return null
+        lastFixMs = nowMs
+        val d = haversine(lat, lon, destLat, destLon)
+        if (d < minDistance) minDistance = d
+
+        samples.addLast(Sample(nowMs, d))
+        while (samples.isNotEmpty() && nowMs - samples.first().tMs > STILL_HOLD_MS) samples.removeFirst()
+
+        val verdict = when {
+            nowMs - startMs > MAX_MS -> Verdict.TIMEOUT
+            d > minDistance + PASS_MARGIN_M + min(accuracyM.toDouble(), 150.0) -> Verdict.PASSED
+            arrived(d, nowMs) -> Verdict.ARRIVED
+            still(nowMs) -> Verdict.STILL
+            else -> Verdict.KEEP
+        }
+        // Cerca del destino se mira seguido (pasarse a 60 km/h toma ~1 min); lejos, menos.
+        val close = d < CLOSE_M
+        return Step(verdict, d, if (close) 15_000 else 45_000, close)
+    }
+
+    private fun arrived(d: Double, nowMs: Long): Boolean {
+        if (d > ARRIVED_RADIUS_M) {
+            nearSinceMs = null
+            return false
+        }
+        val since = nearSinceMs ?: nowMs.also { nearSinceMs = it }
+        return nowMs - since >= ARRIVED_HOLD_MS
+    }
+
+    private fun still(nowMs: Long): Boolean {
+        val first = samples.firstOrNull() ?: return false
+        if (nowMs - first.tMs < STILL_HOLD_MS - 60_000) return false // aún no hay ventana completa
+        val spread = samples.maxOf { it.distanceM } - samples.minOf { it.distanceM }
+        return spread < STILL_SPREAD_M
+    }
+
+    companion object {
+        const val PASS_MARGIN_M = 1_000.0
+        const val ARRIVED_RADIUS_M = 400.0
+        const val ARRIVED_HOLD_MS = 4 * 60_000L
+        const val STILL_HOLD_MS = 15 * 60_000L // largo, para no confundirlo con un trancón
+        const val STILL_SPREAD_M = 200.0
+        const val CLOSE_M = 6_000.0
+        const val MAX_MS = 60 * 60_000L
+    }
+}

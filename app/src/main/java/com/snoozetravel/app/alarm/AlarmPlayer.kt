@@ -2,6 +2,8 @@ package com.snoozetravel.app.alarm
 
 import android.content.Context
 import android.media.AudioAttributes
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.RingtoneManager
@@ -15,38 +17,85 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import com.snoozetravel.app.data.AlarmSettings
 import com.snoozetravel.app.data.VibePattern
+import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
  * Alarma escalonada: vibra fuerte de inmediato y, si está configurado, después de
  * [AlarmSettings.soundDelaySec] empieza a sonar (con volumen que sube gradualmente).
- * Usa el canal de ALARMA para funcionar con el celular en silencio / no molestar.
+ *
+ * - Sin audífonos: canal de ALARMA por el parlante (suena en silencio / no molestar).
+ * - Con audífonos y [AlarmSettings.headphonesOnly]: canal multimedia enrutado solo a los
+ *   audífonos, a volumen moderado. Si se desconectan, pasa al parlante; si se conectan, a ellos.
  */
 class AlarmPlayer(private val ctx: Context) {
     private val handler = Handler(Looper.getMainLooper())
     private val audio = ctx.getSystemService(AudioManager::class.java)
     private var player: MediaPlayer? = null
-    private var savedVolume: Int? = null
+    private var settings: AlarmSettings? = null
+    private var soundStarted = false
+    private var onHeadphones = false
+    private val savedVolumes = mutableMapOf<Int, Int>()
 
-    fun start(s: AlarmSettings) {
-        Vibes.vibrate(ctx, s.pattern, repeat = true)
-        if (s.soundEnabled) handler.postDelayed({ startSound(s) }, s.soundDelaySec * 1000L)
+    private val deviceCallback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>) {
+            val s = settings ?: return
+            if (soundStarted && !onHeadphones && s.headphonesOnly && added.any { it.isHeadphone() }) restartSound(0.3f)
+        }
+
+        override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>) {
+            // Se quitaron los audífonos: seguir por el parlante, ya con volumen alto.
+            if (soundStarted && onHeadphones && headphone() == null) restartSound(0.6f)
+        }
     }
 
-    private fun startSound(s: AlarmSettings) {
-        if (s.maxVolume) runCatching {
-            savedVolume = audio.getStreamVolume(AudioManager.STREAM_ALARM)
-            audio.setStreamVolume(AudioManager.STREAM_ALARM, audio.getStreamMaxVolume(AudioManager.STREAM_ALARM), 0)
+    fun start(s: AlarmSettings) {
+        settings = s
+        Vibes.vibrate(ctx, s.pattern, repeat = true)
+        if (s.soundEnabled) {
+            audio.registerAudioDeviceCallback(deviceCallback, handler)
+            handler.postDelayed({ soundStarted = true; startSound(0.1f) }, s.soundDelaySec * 1000L)
         }
+    }
+
+    private fun restartSound(startVolume: Float) {
+        handler.removeCallbacksAndMessages(null)
+        releasePlayer()
+        restoreVolumes()
+        startSound(startVolume)
+    }
+
+    private fun startSound(startVolume: Float) {
+        val s = settings ?: return
+        val hp = if (s.headphonesOnly) headphone() else null
+        onHeadphones = hp != null
+        val stream = if (hp != null) AudioManager.STREAM_MUSIC else AudioManager.STREAM_ALARM
+
+        runCatching {
+            val maxIdx = audio.getStreamMaxVolume(stream)
+            val target = when {
+                hp != null -> (maxIdx * HEADPHONE_LEVEL).roundToInt() // protege los oídos
+                s.maxVolume -> maxIdx
+                else -> null
+            }
+            if (target != null) {
+                val current = audio.getStreamVolume(stream)
+                savedVolumes.putIfAbsent(stream, current)
+                // En audífonos no bajamos si ya estaba más alto; tampoco subimos a tope.
+                audio.setStreamVolume(stream, if (hp != null) max(current, target) else target, 0)
+            }
+        }
+
+        val attrs = AudioAttributes.Builder()
+            .setUsage(if (hp != null) AudioAttributes.USAGE_MEDIA else AudioAttributes.USAGE_ALARM)
+            .setContentType(if (hp != null) AudioAttributes.CONTENT_TYPE_MUSIC else AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
         val candidates = listOfNotNull(
             s.ringtoneUri?.let(Uri::parse),
             RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM),
             RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE),
         )
-        val attrs = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_ALARM)
-            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-            .build()
         val mp = candidates.firstNotNullOfOrNull { uri ->
             runCatching {
                 MediaPlayer().apply {
@@ -57,10 +106,11 @@ class AlarmPlayer(private val ctx: Context) {
                 }
             }.getOrNull()
         } ?: return
+        if (hp != null && Build.VERSION.SDK_INT >= 28) mp.setPreferredDevice(hp)
         player = mp
 
         if (s.rampVolume) {
-            var volume = 0.1f
+            var volume = startVolume
             mp.setVolume(volume, volume)
             mp.start()
             handler.postDelayed(object : Runnable {
@@ -77,13 +127,41 @@ class AlarmPlayer(private val ctx: Context) {
         }
     }
 
-    fun stop() {
-        handler.removeCallbacksAndMessages(null)
-        Vibes.cancel(ctx)
+    private fun headphone(): AudioDeviceInfo? =
+        audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS).firstOrNull { it.isHeadphone() }
+
+    private fun AudioDeviceInfo.isHeadphone(): Boolean = isSink && type in HEADPHONE_TYPES
+
+    private fun releasePlayer() {
         player?.let { runCatching { it.stop() }; it.release() }
         player = null
-        savedVolume?.let { runCatching { audio.setStreamVolume(AudioManager.STREAM_ALARM, it, 0) } }
-        savedVolume = null
+    }
+
+    private fun restoreVolumes() {
+        savedVolumes.forEach { (stream, v) -> runCatching { audio.setStreamVolume(stream, v, 0) } }
+        savedVolumes.clear()
+    }
+
+    fun stop() {
+        handler.removeCallbacksAndMessages(null)
+        runCatching { audio.unregisterAudioDeviceCallback(deviceCallback) }
+        Vibes.cancel(ctx)
+        releasePlayer()
+        restoreVolumes()
+        soundStarted = false
+        settings = null
+    }
+
+    companion object {
+        private const val HEADPHONE_LEVEL = 0.6f
+
+        private val HEADPHONE_TYPES = buildSet {
+            add(AudioDeviceInfo.TYPE_WIRED_HEADSET)
+            add(AudioDeviceInfo.TYPE_WIRED_HEADPHONES)
+            add(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP)
+            add(AudioDeviceInfo.TYPE_USB_HEADSET)
+            if (Build.VERSION.SDK_INT >= 31) add(AudioDeviceInfo.TYPE_BLE_HEADSET)
+        }
     }
 }
 
