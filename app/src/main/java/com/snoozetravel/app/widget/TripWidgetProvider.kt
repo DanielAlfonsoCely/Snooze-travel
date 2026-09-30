@@ -47,8 +47,20 @@ class TripWidgetProvider : AppWidgetProvider() {
                     rv.setTextViewText(R.id.widget_button, "Desactivar")
                     styleButton(ctx, rv, active = true)
                 }
+                is TripStatus.Guarding -> {
+                    rv.setTextViewText(R.id.widget_title, "Vigilando que te bajes")
+                    rv.setTextViewText(
+                        R.id.widget_subtitle,
+                        s.distanceM?.let { "A ${formatDistance(it)} de ${s.destinationName}" } ?: s.destinationName,
+                    )
+                    rv.setTextViewText(R.id.widget_button, "Ya me bajé")
+                    styleButton(ctx, rv, active = true)
+                }
                 is TripStatus.Alarming -> {
-                    rv.setTextViewText(R.id.widget_title, "¡Llegando a ${s.destinationName}!")
+                    rv.setTextViewText(
+                        R.id.widget_title,
+                        if (s.again) "¡Te pasas de ${s.destinationName}!" else "¡Llegando a ${s.destinationName}!",
+                    )
                     rv.setTextViewText(R.id.widget_subtitle, "Toca para apagar")
                     rv.setTextViewText(R.id.widget_button, "Apagar")
                     styleButton(ctx, rv, active = true)

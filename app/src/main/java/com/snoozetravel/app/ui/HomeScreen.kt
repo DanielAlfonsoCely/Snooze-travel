@@ -77,6 +77,10 @@ import com.snoozetravel.app.data.Store
 import com.snoozetravel.app.data.Trigger
 import com.snoozetravel.app.data.formatDistance
 import com.snoozetravel.app.data.formatEta
+import com.snoozetravel.app.data.TriggerMode
+import com.snoozetravel.app.data.radiusMeters
+import com.snoozetravel.app.search.Place
+import androidx.compose.foundation.layout.fillMaxSize
 import com.snoozetravel.app.trip.TripService
 import com.snoozetravel.app.trip.TripState
 import com.snoozetravel.app.trip.TripStatus
@@ -99,6 +103,7 @@ fun HomeScreen(
     val activeId = when (val s = status) {
         is TripStatus.Active -> s.destinationId
         is TripStatus.Alarming -> s.destinationId
+        is TripStatus.Guarding -> s.destinationId
         TripStatus.Idle -> null
     }
 
@@ -142,8 +147,9 @@ fun HomeScreen(
                 ) { current ->
                     when (val s = current) {
                         TripStatus.Idle -> IdleHeader(hasDestinations = destinations.isNotEmpty())
-                        is TripStatus.Active -> ActiveTripCard(s, onStop = { TripService.stop(ctx) })
+                        is TripStatus.Active -> ActiveTripCard(s, dark, onStop = { TripService.stop(ctx) })
                         is TripStatus.Alarming -> AlarmingCard(s, onDismiss = { TripService.dismiss(ctx) })
+                        is TripStatus.Guarding -> GuardingCard(s, dark, onDone = { TripService.stop(ctx) })
                     }
                 }
             }
@@ -167,7 +173,7 @@ fun HomeScreen(
     }
 
     sheetFor?.let { d ->
-        ActivateSheet(d, onDismiss = { sheetFor = null }, onActivate = { t, remember ->
+        ActivateSheet(d, dark, onDismiss = { sheetFor = null }, onActivate = { t, remember ->
             if (remember) Store.saveDestination(d.copy(trigger = t))
             sheetFor = null
             onActivate(d, t)
@@ -219,7 +225,7 @@ private fun IdleHeader(hasDestinations: Boolean) {
 }
 
 @Composable
-private fun ActiveTripCard(s: TripStatus.Active, onStop: () -> Unit) {
+private fun ActiveTripCard(s: TripStatus.Active, dark: Boolean, onStop: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val pulse = rememberInfiniteTransition(label = "pulse")
     val dot by pulse.animateFloat(0.6f, 1.25f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "dot")
@@ -267,8 +273,93 @@ private fun ActiveTripCard(s: TripStatus.Active, onStop: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = cs.onPrimaryContainer.copy(alpha = 0.75f),
             )
+            Spacer(Modifier.height(14.dp))
+            // Mapa en vivo: tú, el destino y el círculo donde sonará (punteado = estimado por tiempo).
+            val timeMode = s.trigger.mode == TriggerMode.TIME
+            LiveMap(
+                dest = Place(s.destinationName, "", s.destLat, s.destLon),
+                radiusM = s.trigger.radiusMeters(s.speedMs),
+                dashed = timeMode,
+                me = if (s.myLat != null && s.myLon != null) s.myLat to s.myLon else null,
+                dark = dark,
+                caption = if (timeMode) {
+                    if (s.speedMs != null) "Círculo estimado con la velocidad actual del bus" else "Círculo estimado a 60 km/h"
+                } else null,
+            )
             Spacer(Modifier.height(16.dp))
             OutlinedButton(onClick = onStop, modifier = Modifier.fillMaxWidth()) { Text("Desactivar") }
+        }
+    }
+}
+
+@Composable
+private fun GuardingCard(s: TripStatus.Guarding, dark: Boolean, onDone: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val pulse = rememberInfiniteTransition(label = "guard")
+    val dot by pulse.animateFloat(0.6f, 1.25f, infiniteRepeatable(tween(1300), RepeatMode.Reverse), label = "dot")
+
+    Surface(color = cs.secondaryContainer, shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(22.dp).animateContentSize()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(10.dp).scale(dot).clip(CircleShape).background(cs.secondary))
+                Spacer(Modifier.width(10.dp))
+                Text("Vigilando que te bajes", style = MaterialTheme.typography.labelLarge, color = cs.onSecondaryContainer)
+            }
+            Spacer(Modifier.height(12.dp))
+            Text(
+                s.distanceM?.let { "A ${formatDistance(it)} de ${s.destinationName}" } ?: s.destinationName,
+                style = MaterialTheme.typography.titleLarge,
+                color = cs.onSecondaryContainer,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Si el bus pasa tu destino y se aleja, la alarma vuelve a sonar.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = cs.onSecondaryContainer.copy(alpha = 0.75f),
+            )
+            Spacer(Modifier.height(14.dp))
+            LiveMap(
+                dest = Place(s.destinationName, "", s.destLat, s.destLon),
+                radiusM = null,
+                dashed = false,
+                me = if (s.myLat != null && s.myLon != null) s.myLat to s.myLon else null,
+                dark = dark,
+                caption = null,
+            )
+            Spacer(Modifier.height(16.dp))
+            Button(onClick = onDone, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Ya me bajé") }
+        }
+    }
+}
+
+@Composable
+private fun LiveMap(dest: Place, radiusM: Double?, dashed: Boolean, me: Pair<Double, Double>?, dark: Boolean, caption: String?) {
+    val cs = MaterialTheme.colorScheme
+    Box(Modifier.fillMaxWidth().height(200.dp).clip(MaterialTheme.shapes.medium)) {
+        OsmMap(
+            point = dest,
+            radiusM = radiusM,
+            dark = dark,
+            dashed = dashed,
+            me = me,
+            fit = MapFit.TRIP,
+            modifier = Modifier.fillMaxSize(),
+        )
+        if (caption != null) {
+            Surface(
+                color = cs.surface.copy(alpha = 0.88f),
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier.align(Alignment.BottomStart).padding(8.dp),
+            ) {
+                Text(
+                    caption,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = cs.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
         }
     }
 }
@@ -278,7 +369,7 @@ private fun AlarmingCard(s: TripStatus.Alarming, onDismiss: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     Surface(color = cs.tertiaryContainer, shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(22.dp)) {
-            Text("¡Estás llegando!", style = MaterialTheme.typography.headlineMedium, color = cs.onTertiaryContainer)
+            Text(if (s.again) "¡Te estás pasando!" else "¡Estás llegando!", style = MaterialTheme.typography.headlineMedium, color = cs.onTertiaryContainer)
             Text(s.destinationName, style = MaterialTheme.typography.titleMedium, color = cs.onTertiaryContainer.copy(alpha = 0.8f))
             Spacer(Modifier.height(16.dp))
             Button(
@@ -358,7 +449,7 @@ private fun EmptyState(onNew: () -> Unit, modifier: Modifier = Modifier) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ActivateSheet(d: Destination, onDismiss: () -> Unit, onActivate: (Trigger, Boolean) -> Unit) {
+private fun ActivateSheet(d: Destination, dark: Boolean, onDismiss: () -> Unit, onActivate: (Trigger, Boolean) -> Unit) {
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
     var trigger by remember(d.id) { mutableStateOf(d.trigger) }
@@ -371,6 +462,8 @@ private fun ActivateSheet(d: Destination, onDismiss: () -> Unit, onActivate: (Tr
             if (d.address.isNotBlank()) {
                 Text(d.address, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, maxLines = 2)
             }
+            Spacer(Modifier.height(12.dp))
+            RadiusPreviewMap(Place(d.name, d.address, d.lat, d.lon), trigger, dark, Modifier.height(170.dp))
             SectionTitle("¿Cuándo despertarte en este viaje?")
             TriggerSelector(trigger, { trigger = it })
             AnimatedVisibility(trigger != d.trigger) {

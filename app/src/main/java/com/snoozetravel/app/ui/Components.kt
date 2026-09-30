@@ -33,6 +33,12 @@ import androidx.compose.ui.unit.dp
 import com.snoozetravel.app.data.Trigger
 import com.snoozetravel.app.data.TriggerMode
 import com.snoozetravel.app.data.formatKm
+import com.snoozetravel.app.data.radiusMeters
+import com.snoozetravel.app.search.Place
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Surface
+import androidx.compose.ui.draw.clip
 import kotlin.math.roundToInt
 
 /** Selector de "cuándo despertarme": por distancia (km) o por tiempo (min antes). */
@@ -133,6 +139,59 @@ fun AnimatedCounter(text: String, modifier: Modifier = Modifier) {
         modifier = modifier,
     ) { t ->
         Text(t, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Light)
+    }
+}
+
+/**
+ * Mapa con el círculo donde sonará la alarma (como las rutinas de Samsung).
+ * Por distancia es exacto; por tiempo es un estimado a 60 km/h (borde punteado).
+ */
+@Composable
+fun RadiusPreviewMap(
+    place: Place?,
+    trigger: Trigger,
+    dark: Boolean,
+    modifier: Modifier = Modifier,
+    center: Pair<Double, Double>? = null,
+    interactive: Boolean = false,
+    onLongPress: ((Double, Double) -> Unit)? = null,
+    topHint: String? = null,
+) {
+    val cs = MaterialTheme.colorScheme
+    val isTime = trigger.mode == TriggerMode.TIME
+    val radius = trigger.radiusMeters()
+    Box(modifier.fillMaxWidth().clip(MaterialTheme.shapes.large)) {
+        OsmMap(
+            point = place,
+            radiusM = radius,
+            dark = dark,
+            dashed = isTime,
+            center = center,
+            interactive = interactive,
+            onLongPress = onLongPress,
+            modifier = Modifier.fillMaxSize(),
+        )
+        if (topHint != null) MapChip(topHint, Modifier.align(Alignment.TopCenter))
+        if (place != null) {
+            MapChip(
+                if (isTime) "≈ ${formatKm(radius / 1000)} a 60 km/h · ${trigger.value.roundToInt()} min"
+                else "Sonará al entrar al círculo de ${formatKm(trigger.value)}",
+                Modifier.align(Alignment.BottomStart),
+            )
+        }
+    }
+}
+
+@Composable
+private fun MapChip(text: String, modifier: Modifier = Modifier) {
+    val cs = MaterialTheme.colorScheme
+    Surface(color = cs.surface.copy(alpha = 0.9f), shape = MaterialTheme.shapes.small, modifier = modifier.padding(10.dp)) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelMedium,
+            color = cs.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+        )
     }
 }
 

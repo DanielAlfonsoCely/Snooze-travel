@@ -73,7 +73,20 @@ data class AlarmSettings(
     val preAlertEnabled: Boolean = false,
     val preOffsetKm: Double = 3.0,
     val preOffsetMin: Double = 5.0,
+    /** Si hay audífonos conectados, el sonido sale solo por ellos (no molesta en el bus). */
+    val headphonesOnly: Boolean = true,
+    /** Tras apagar la alarma, sigue vigilando y vuelve a sonar si el bus pasa el destino. */
+    val guardEnabled: Boolean = true,
 )
+
+/** Velocidad para estimar el círculo del modo "por tiempo" antes de conocer la real (60 km/h). */
+const val ESTIMATE_SPEED_MS = 16.67
+
+/** Radio (m) en el que sonará la alarma; en modo tiempo es una estimación según la velocidad. */
+fun Trigger.radiusMeters(speedMs: Double? = null): Double = when (mode) {
+    TriggerMode.DISTANCE -> value * 1000
+    TriggerMode.TIME -> (speedMs ?: ESTIMATE_SPEED_MS) * value * 60
+}
 
 fun formatKm(km: Double): String = when {
     km < 1.0 -> "${(km * 1000).roundToInt()} m"
